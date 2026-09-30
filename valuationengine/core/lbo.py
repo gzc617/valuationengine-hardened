@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from core.models import Assumptions, Company, LBOResult
+from valuationengine.core.models import Assumptions, Company, LBOResult
 
 
 def run(company: Company, assumptions: Assumptions) -> LBOResult:

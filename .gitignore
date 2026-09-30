@@ -11,3 +11,8 @@ dist/
 .ipynb_checkpoints/
 .DS_Store
 .env
+.env.*
+secrets.toml
+credentials.json
+*.pem
+*.key

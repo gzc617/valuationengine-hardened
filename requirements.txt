@@ -1,10 +1,8 @@
-certifi
-yfinance
-pandas
-numpy
-scipy
-matplotlib
-click
-streamlit
-fastmcp
-pytest
+# Direct runtime dependencies for maintenance and future resolution.
+# Regenerate requirements-lock.txt from these pins with hashes and binary wheels.
+click==8.5.0
+matplotlib==3.11.2
+numpy==2.5.3
+pandas==3.0.6
+scipy==1.18.1
+yfinance==1.7.0

@@ -7,8 +7,8 @@ from typing import Callable
 
 import pandas as pd
 
-from core import dcf
-from core.models import Assumptions, Company, assumption_field_names
+from valuationengine.core import dcf
+from valuationengine.core.models import Assumptions, Company, assumption_field_names
 
 
 def run(

@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from core.models import Assumptions, Company, DCFResult
+from valuationengine.core.models import Assumptions, Company, DCFResult
 
 
 def compute_wacc(assumptions: Assumptions, beta: float) -> float:

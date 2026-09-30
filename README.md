@@ -1,25 +1,23 @@
 # valuationengine
 
-**Open-source DCF and LBO valuation toolkit.** Shipped as a Python library, a command-line tool, an interactive Streamlit dashboard, and an MCP server that plugs into Claude, ChatGPT, and any other LLM client via the [Model Context Protocol](https://modelcontextprotocol.io/).
-
-One engine. Four interfaces. Built for analysts, students, and AI agents that want to run real valuation models instead of guessing.
+**DCF and LBO valuation toolkit.** Shipped as a Python library and a command-line tool. It does not call a language-model API, start an MCP server, or run a web server. See [SECURITY.md](SECURITY.md).
 
 ---
 
 ## What it does
 
-`valuationengine` runs the kind of valuation work an equity analyst or private-equity associate would do in Excel, but in seconds and from any interface:
+`valuationengine` runs the kind of valuation work an equity analyst or private-equity associate would do in Excel, but in seconds from the library or the CLI:
 
 - **Discounted Cash Flow (DCF)** with Gordon growth or exit-multiple terminal value
 - **Leveraged Buyout (LBO)** with sources and uses, debt schedules, sponsor IRR and MOIC
 - **Reverse DCF** that back-solves the market-implied assumptions baked into the current price
 - **Sensitivity tables** across any two assumption fields
 - **Scenario analysis** with built-in bull, base, and bear cases
-- **Auto-fetched fundamentals** via yfinance with no manual data entry
+- **Fundamentals** via yfinance when `SAFE_MODE` is off, or deterministic fixtures when `SAFE_MODE=1`
 
 Assumptions auto-calibrate to each company's own five-year history. Revenue growth, operating margin, capex intensity, D&A intensity, and working-capital intensity all default to that specific company's trailing averages instead of one generic profile applied to every ticker. Explicit overrides always take precedence. Terminal growth and WACC inputs are deliberately left at conservative macro defaults rather than extrapolated from history, since perpetuity assumptions should reflect long-run sustainable growth, not a company's recent trajectory.
 
-Every interface (Python, CLI, dashboard, MCP) is a thin wrapper around the same pure-Python engine, so a result computed in one is identical to a result computed in another.
+The library and the CLI call the same pure-Python engine, so the same inputs produce the same result from either path.
 
 ---
 
@@ -29,9 +27,10 @@ Every interface (Python, CLI, dashboard, MCP) is a thin wrapper around the same 
 git clone https://github.com/rishabhkarnawat/valuationengine.git
 cd valuationengine
 pip install -r requirements.txt
+pip install --no-deps .
 ```
 
-Requires Python 3.10 or higher. `certifi` is included for reliable HTTPS (OpenAI API calls on macOS).
+Requires Python 3.12 or higher. Direct runtime dependencies are pinned in `requirements.txt`. The hashed lock `requirements-lock.txt` is regenerated from those pins for CPython 3.12 on linux/amd64. Test-only dependencies are in `requirements-test.txt`.
 
 ---
 
@@ -56,74 +55,18 @@ print(implied["interpretation"])
 ### From the command line
 
 ```bash
-python -m valuationengine.adapters.cli dcf AMZN --growth 0.10 --margin 0.20
-python -m valuationengine.adapters.cli reverse AMZN
-python -m valuationengine.adapters.cli lbo AMZN --entry-multiple 10 --debt-pct 0.6
-python -m valuationengine.adapters.cli scenario AMZN
-python -m valuationengine.adapters.cli sensitivity AMZN \
+python -m valuationengine dcf AMZN --growth 0.10 --margin 0.20
+python -m valuationengine reverse AMZN
+python -m valuationengine lbo AMZN --entry-multiple 10 --debt-pct 0.6
+python -m valuationengine scenario AMZN
+python -m valuationengine sensitivity AMZN \
     --x-field revenue_growth --x-min 0.04 --x-max 0.12 --x-steps 5 \
     --y-field operating_margin --y-min 0.15 --y-max 0.25 --y-steps 5
 ```
 
-### As a Streamlit dashboard
+`ve` is the installed console script. `python ve.py` runs the same CLI from a checkout. Tickers are validated, projection years must be 1–10, and sensitivity steps must be 2–20 on each axis.
 
-```bash
-python3 -m streamlit run adapters/dashboard.py
-```
-
-Enter one ticker (e.g. `DPZ`) or up to five comma-separated tickers (e.g. `DPZ, CMG, SBUX`) for peer comparison.
-
-**Dashboard features:**
-
-- **Modern UI** — Dark sidebar, gradient hero, metric cards with mono numerals, styled tables and tabs
-- **Summary card** — Current price, fair value, upside/downside badge, LBO IRR, and a one-line interpretation
-- **HTML tables** — Fundamentals, DCF, scenarios, reverse DCF, LBO returns, projections, and debt schedule
-- **Sensitivity grid** — 2D heatmap of fair value across revenue growth and operating margin
-- **Peer comparison** — Side-by-side table sorted by DCF upside with insight cards (multi-ticker mode)
-- **Export CSV** — Download the main valuation summary
-- **UX** — Loading skeletons, fetch progress, clear error messages, tooltips, and a Refresh button to clear caches
-- **OpenAI (optional)** — Toggle tool-calling in the sidebar; set `OPENAI_API_KEY` or paste a key in-session. Requires OpenAI billing/credits for `gpt-4o` models. The local valuation engine runs without OpenAI.
-
-Tabs: **Fundamentals | Valuation | Sensitivity | LBO | Compare**
-
-### As an MCP server (Claude, ChatGPT, Cursor, Continue, anything that speaks MCP)
-
-The MCP server exposes six tools that any Model Context Protocol client can call:
-
-| Tool | What it does |
-|------|--------------|
-| `fetch_fundamentals` | Pulls revenue, EBITDA, debt, beta, and history for a ticker |
-| `run_dcf` | Full DCF with WACC, projection, terminal value, intrinsic value per share |
-| `run_lbo` | LBO with sources/uses, debt schedule, sponsor IRR and MOIC |
-| `run_reverse_dcf` | Back-solves the market-implied growth, margin, or terminal rate |
-| `run_sensitivity` | 2D sensitivity grid across any two assumption fields |
-| `run_scenario` | Bull, base, and bear DCF cases side by side |
-
-**Claude Desktop.** Add this to `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "valuationengine": {
-      "command": "python",
-      "args": ["-m", "valuationengine.adapters.mcp_server"],
-      "cwd": "/absolute/path/to/valuationengine"
-    }
-  }
-}
-```
-
-**Cursor, ChatGPT Desktop, Continue, or any MCP-aware client.** The same JSON block in their respective MCP config files. Point at the local repo.
-
-Once connected, conversations like these work end to end:
-
-> *"What revenue growth rate is the market pricing into Nvidia right now?"*
->
-> *"Run a sponsor LBO on Domino's at a 10x entry multiple and 60% debt. What's the IRR?"*
->
-> *"Compare DCF intrinsic value to current price for the Mag 7 and rank by upside."*
-
-The LLM calls the tools, receives real numbers from a real model, and reasons about them. No hallucinated valuations.
+Set `SAFE_MODE=1` to skip live market data and use deterministic fixture companies (`DEMO`, `PEER`, `BETA`, `BULL`, `BEAR`).
 
 ---
 
@@ -140,19 +83,16 @@ valuationengine/
 │   ├── scenario.py          bull, base, bear runner
 │   └── reverse.py           reverse DCF solver via scipy brentq
 ├── data/
-│   └── fetcher.py           auto-fetched fundamentals via yfinance
-├── adapters/
-│   ├── cli.py               Click CLI
-│   ├── mcp_server.py        FastMCP server for any LLM client
-│   ├── dashboard.py         Streamlit dashboard
-│   ├── dashboard_tables.py  HTML table renderers for the dashboard
-│   ├── dashboard_ux.py      Input validation, loading states, fetch errors
-│   └── openai_tools_client.py  Optional OpenAI tool-calling bridge
-├── examples/                case study notebooks
-└── tests/                   pytest suite, no network calls
+│   ├── fetcher.py           yfinance when SAFE_MODE is off; fixtures when it is on
+│   └── fixtures.py          deterministic companies for safe mode
+├── validation.py            ticker, year, and sensitivity limits
+├── safe_mode.py             SAFE_MODE flag and socket guard
+└── adapters/
+    ├── cli.py               Click CLI
+    └── mcp_server.py        disabled; import fails closed
 ```
 
-The core engine never touches the network, never reads files, and never knows about UI. Every adapter calls the same set of functions, which is why the dashboard, the CLI, and the MCP server always produce identical results from identical inputs.
+The core engine never touches the network, never reads files, and never knows about a user interface. The CLI calls the same functions as the library.
 
 ---
 
@@ -162,7 +102,7 @@ A standard DCF asks: *given these assumptions, what is this company worth?* That
 
 A reverse DCF flips it: *given the current price, what assumptions must you believe?* That question has exactly one answer. Compare it to your own view of what is realistic.
 
-`valuationengine` treats reverse DCF as a first-class capability. Solve for implied revenue growth, operating margin, or terminal growth. The MCP server exposes it directly so LLMs can answer "what is the market pricing in?" with a real number instead of a guess.
+`valuationengine` treats reverse DCF as a first-class capability. Solve for implied revenue growth, operating margin, or terminal growth from the CLI or the library.
 
 ---
 
@@ -179,10 +119,11 @@ Real-world walkthroughs in `examples/`:
 ## Testing
 
 ```bash
-pytest tests/
+pip install -r requirements-test.txt
+pytest
 ```
 
-Full pytest suite covering the core engine, dashboard helpers, and the data fetcher. All yfinance calls are mocked, so the suite runs offline and finishes in seconds.
+The suite covers the core engine, the data fetcher, safe mode, input limits, and the disabled model-API and MCP paths. yfinance calls are mocked. Safe-mode tests use fixtures. Test dependencies stay in `requirements-test.txt`.
 
 ---
 
@@ -191,8 +132,6 @@ Full pytest suite covering the core engine, dashboard helpers, and the data fetc
 - Direct SEC EDGAR integration as a primary data source
 - Trading-comps and transaction-comps modules
 - Multi-currency support for international tickers
-- Hosted Streamlit Cloud demo
-- Deeper OpenAI orchestration (populate dashboard directly from model JSON)
 
 ---
 

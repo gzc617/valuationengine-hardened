@@ -1,27 +1,93 @@
-"""Fundamentals fetcher via yfinance"""
+"""Company fundamentals.
+
+SAFE_MODE=1 returns a deterministic fixture and does not import yfinance.
+Otherwise a live fetch runs with a wall-clock timeout. Failures surface as
+ValueError or TimeoutError for the CLI and library callers.
+"""
 
 from __future__ import annotations
 
-import yfinance as yf
+import concurrent.futures
+import threading
 
-from core.models import Company
+from valuationengine.core.models import Company
+from valuationengine.data.fixtures import fixture_company
+from valuationengine.safe_mode import install_network_guard, safe_mode_enabled
+from valuationengine.validation import FETCH_TIMEOUT_SECONDS, normalize_ticker, validate_history_years
+
+_LIVE_FETCH_WORKERS = 5
+_LIVE_FETCH_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=_LIVE_FETCH_WORKERS)
+_LIVE_FETCH_SLOTS = threading.BoundedSemaphore(_LIVE_FETCH_WORKERS)
 
 
 def fetch_company(ticker: str, history_years: int = 5) -> Company:
     """
-    Pull fundamentals from yfinance and return a populated Company.
+    Return a Company for one ticker.
 
     Args:
         ticker: Equity ticker symbol.
         history_years: Number of most recent fiscal years to include (oldest first).
-
-    Returns:
-        Company populated from yfinance financial statements and market data.
     """
-    if history_years <= 0:
-        raise ValueError(f"history_years must be positive; got {history_years}.")
+    symbol = normalize_ticker(ticker)
+    history_years = validate_history_years(history_years)
 
-    symbol = ticker.strip().upper()
+    if safe_mode_enabled():
+        install_network_guard()
+        return fixture_company(symbol, history_years)
+
+    try:
+        return _fetch_live_with_timeout(symbol, history_years)
+    except TimeoutError:
+        raise
+    except ValueError:
+        raise
+    except RuntimeError:
+        raise
+    except OSError as exc:
+        raise TimeoutError(
+            f"Could not fetch data for ticker '{symbol}' because the network call failed."
+        ) from exc
+    except Exception as exc:
+        message = str(exc).strip() or type(exc).__name__
+        lowered = message.lower()
+        if any(token in lowered for token in ("timeout", "timed out", "connection", "network", "ssl")):
+            raise TimeoutError(
+                f"Timed out fetching data for ticker '{symbol}'."
+            ) from exc
+        raise ValueError(
+            f"Could not fetch data for ticker '{symbol}'. Check the symbol or try again."
+        ) from exc
+
+
+def _load_yfinance():
+    """Import yfinance only on the live path."""
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        raise RuntimeError(
+            "Live market data requires the yfinance package. "
+            "Set SAFE_MODE=1 to use deterministic fixture companies."
+        ) from exc
+    return yf
+
+
+def _fetch_live_with_timeout(symbol: str, history_years: int) -> Company:
+    if not _LIVE_FETCH_SLOTS.acquire(blocking=False):
+        raise TimeoutError("Live market-data worker limit reached. Try again after current fetches finish.")
+    future = _LIVE_FETCH_POOL.submit(_fetch_live, symbol, history_years)
+    future.add_done_callback(lambda _future: _LIVE_FETCH_SLOTS.release())
+    try:
+        return future.result(timeout=FETCH_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"Timed out fetching data for ticker '{symbol}' "
+            f"after {FETCH_TIMEOUT_SECONDS} seconds."
+        ) from exc
+
+
+
+def _fetch_live(symbol: str, history_years: int) -> Company:
+    yf = _load_yfinance()
     yf_ticker = yf.Ticker(symbol)
     info = yf_ticker.info or {}
 

@@ -1,27 +1,36 @@
 [project]
 name = "valuationengine"
 version = "0.1.0"
-description = "Open-source DCF, LBO, and reverse DCF toolkit"
-requires-python = ">=3.10"
+description = "DCF, LBO, and reverse DCF toolkit"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
 dependencies = [
-    "yfinance",
-    "pandas",
-    "numpy",
-    "scipy",
-    "matplotlib",
-    "click",
-    "streamlit",
-    "fastmcp",
-    "pytest",
+    "click==8.5.0",
+    "matplotlib==3.11.2",
+    "numpy==2.5.3",
+    "pandas==3.0.6",
+    "scipy==1.18.1",
+    "yfinance==1.7.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==9.1.1",
 ]
 
 [project.scripts]
-ve = "adapters.cli:cli"
+ve = "valuationengine.adapters.cli:cli"
 
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "data*", "adapters*"]
+include = ["valuationengine*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

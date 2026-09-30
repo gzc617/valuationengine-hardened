@@ -5,8 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Callable
 
-from core import dcf
-from core.models import Assumptions, Company
+from valuationengine.core import dcf
+from valuationengine.core.models import Assumptions, Company
 
 
 def run(

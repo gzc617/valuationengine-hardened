@@ -1,28 +1,52 @@
-"""Click-based command-line interface"""
+"""Click-based command-line interface."""
 
 import sys
 from pathlib import Path
 
-_PKG_ROOT = Path(__file__).resolve().parents[1]
-if str(_PKG_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PKG_ROOT))
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import click
 import pandas as pd
 
-from core import dcf as dcf_module
-from core import lbo as lbo_module
-from core import reverse as reverse_module
-from core import scenario as scenario_module
-from core import sensitivity as sensitivity_module
-from core.models import Assumptions
-from data.fetcher import fetch_company
+from valuationengine.core import dcf as dcf_module
+from valuationengine.core import lbo as lbo_module
+from valuationengine.core import reverse as reverse_module
+from valuationengine.core import scenario as scenario_module
+from valuationengine.core import sensitivity as sensitivity_module
+from valuationengine.core.models import Assumptions
+from valuationengine.data.fetcher import fetch_company
+from valuationengine.safe_mode import install_network_guard, safe_mode_enabled
+from valuationengine.validation import (
+    normalize_ticker,
+    validate_hold_years,
+    validate_projection_years,
+    validate_sensitivity_steps,
+)
 
 
 @click.group()
 def cli():
-    """Open-source DCF and LBO valuation toolkit."""
-    pass
+    """DCF, LBO, and reverse DCF valuation toolkit."""
+    if safe_mode_enabled():
+        install_network_guard()
+        click.echo(
+            "SAFE_MODE=1: using deterministic fixture companies. External network calls are blocked.",
+            err=True,
+        )
+
+
+def _load_company(ticker: str):
+    """Validate one ticker and load it (fixture data when SAFE_MODE is on)."""
+    symbol = normalize_ticker(ticker)
+    return fetch_company(symbol)
+
+
+def _history_source(ticker: str) -> str:
+    if safe_mode_enabled():
+        return "deterministic fixture history (SAFE_MODE=1)"
+    return f"{ticker}'s own 5yr history"
 
 
 @cli.command()
@@ -50,7 +74,10 @@ def dcf(
 ):
     """Run a DCF on TICKER."""
     try:
-        company = fetch_company(ticker)
+        if years is not None:
+            years = validate_projection_years(years)
+        company = _load_company(ticker)
+        ticker = company.ticker
         assumptions = _build_assumptions(
             company,
             growth=growth,
@@ -65,14 +92,14 @@ def dcf(
         result = dcf_module.run(company, assumptions)
         click.echo(
             f"Calibrated base case: {assumptions.revenue_growth*100:.1f}% growth, "
-            f"{assumptions.operating_margin*100:.1f}% margin (from {ticker}'s own 5yr history "
+            f"{assumptions.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
             f"unless overridden by flags)"
         )
         click.echo(result.summary())
         click.echo("")
         click.echo("Projection:")
         click.echo(result.projection.to_string(index=False, float_format=lambda x: f"{x:,.2f}"))
-    except ValueError as e:
+    except (ValueError, TimeoutError, OSError) as e:
         click.echo(str(e), err=True)
         ctx.exit(1)
 
@@ -83,12 +110,13 @@ def dcf(
 @click.option("--exit-multiple", type=float, default=None)
 @click.option("--debt-pct", type=float, default=None)
 @click.option("--interest-rate", type=float, default=None)
-@click.option("--hold", type=int, default=None)
+@click.option("--hold", type=click.IntRange(1, 10), default=None)
 @click.pass_context
 def lbo(ctx, ticker, entry_multiple, exit_multiple, debt_pct, interest_rate, hold):
     """Run an LBO on TICKER."""
     try:
-        company = fetch_company(ticker)
+        company = _load_company(ticker)
+        ticker = company.ticker
         a = Assumptions.calibrated_for(company)
         a.tax_rate = company.effective_tax_rate
         if entry_multiple is not None:
@@ -100,31 +128,32 @@ def lbo(ctx, ticker, entry_multiple, exit_multiple, debt_pct, interest_rate, hol
         if interest_rate is not None:
             a.lbo_debt_interest_rate = interest_rate
         if hold is not None:
-            a.hold_period_years = hold
+            a.hold_period_years = validate_hold_years(hold)
         result = lbo_module.run(company, a)
         click.echo(
             f"Calibrated base case: {a.revenue_growth*100:.1f}% growth, "
-            f"{a.operating_margin*100:.1f}% margin (from {ticker}'s own 5yr history "
+            f"{a.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
             f"unless overridden by flags)"
         )
         click.echo(result.summary())
         click.echo("")
         click.echo("Debt schedule:")
         click.echo(result.debt_schedule.to_string(index=False, float_format=lambda x: f"{x:,.2f}"))
-    except ValueError as e:
+    except (ValueError, TimeoutError, OSError) as e:
         click.echo(str(e), err=True)
         ctx.exit(1)
 
 
 @cli.command()
 @click.argument("ticker")
-@click.option("--field", default="revenue_growth", help="Assumption field to solve for.")
+@click.option("--field", default="revenue_growth", type=click.Choice(["revenue_growth", "operating_margin", "terminal_growth"]), help="Assumption field to solve for.")
 @click.option("--target", default="market_cap", type=click.Choice(["market_cap", "current_price"]))
 @click.pass_context
 def reverse(ctx, ticker, field, target):
     """Run a reverse DCF on TICKER: back-solve market-implied assumptions."""
     try:
-        company = fetch_company(ticker)
+        company = _load_company(ticker)
+        ticker = company.ticker
         assumptions = Assumptions.calibrated_for(company)
         assumptions.tax_rate = company.effective_tax_rate
         result = reverse_module.solve(
@@ -132,7 +161,7 @@ def reverse(ctx, ticker, field, target):
         )
         click.echo(
             f"Calibrated base case: {assumptions.revenue_growth*100:.1f}% growth, "
-            f"{assumptions.operating_margin*100:.1f}% margin (from {ticker}'s own 5yr history "
+            f"{assumptions.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
             f"unless overridden by flags)"
         )
         click.echo(f"\nReverse DCF for {ticker}")
@@ -140,7 +169,7 @@ def reverse(ctx, ticker, field, target):
         click.echo(f"Target ({result['target']}): {result['target_value']:,.2f}")
         click.echo(f"Implied value: {result['implied_value']:.4f}")
         click.echo(f"\n{result['interpretation']}")
-    except ValueError as e:
+    except (ValueError, TimeoutError, OSError) as e:
         click.echo(str(e), err=True)
         ctx.exit(1)
 
@@ -155,7 +184,7 @@ def reverse(ctx, ticker, field, target):
 @click.option("--y-min", type=float, required=True)
 @click.option("--y-max", type=float, required=True)
 @click.option("--y-steps", type=int, default=5)
-@click.option("--output", default="value_per_share")
+@click.option("--output", default="value_per_share", type=click.Choice(["value_per_share", "upside", "enterprise_value", "equity_value"]))
 @click.pass_context
 def sensitivity(
     ctx,
@@ -174,7 +203,10 @@ def sensitivity(
     import numpy as np
 
     try:
-        company = fetch_company(ticker)
+        x_steps = validate_sensitivity_steps(x_steps, axis="X steps")
+        y_steps = validate_sensitivity_steps(y_steps, axis="Y steps")
+        company = _load_company(ticker)
+        ticker = company.ticker
         assumptions = Assumptions.calibrated_for(company)
         assumptions.tax_rate = company.effective_tax_rate
         x_values = list(np.linspace(x_min, x_max, x_steps))
@@ -190,13 +222,13 @@ def sensitivity(
         )
         click.echo(
             f"Calibrated base case: {assumptions.revenue_growth*100:.1f}% growth, "
-            f"{assumptions.operating_margin*100:.1f}% margin (from {ticker}'s own 5yr history "
+            f"{assumptions.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
             f"unless overridden by flags)"
         )
         click.echo(f"\nSensitivity table for {ticker} ({output})")
         click.echo(f"Rows: {y_field}, Columns: {x_field}\n")
         click.echo(table.to_string(float_format=lambda x: f"{x:,.2f}"))
-    except ValueError as e:
+    except (ValueError, TimeoutError, OSError) as e:
         click.echo(str(e), err=True)
         ctx.exit(1)
 
@@ -209,7 +241,8 @@ def sensitivity(
 def scenario(ctx, ticker, growth_delta, margin_delta):
     """Run bull / base / bear scenario analysis on TICKER."""
     try:
-        company = fetch_company(ticker)
+        company = _load_company(ticker)
+        ticker = company.ticker
         assumptions = Assumptions.calibrated_for(company)
         assumptions.tax_rate = company.effective_tax_rate
         scenarios = scenario_module.build_bull_base_bear(
@@ -220,7 +253,7 @@ def scenario(ctx, ticker, growth_delta, margin_delta):
         results = scenario_module.run(company, scenarios)
         click.echo(
             f"Calibrated base case: {assumptions.revenue_growth*100:.1f}% growth, "
-            f"{assumptions.operating_margin*100:.1f}% margin (from {ticker}'s own 5yr history "
+            f"{assumptions.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
             f"unless overridden by flags)"
         )
         click.echo(f"\nScenario analysis for {ticker}\n")
@@ -235,7 +268,7 @@ def scenario(ctx, ticker, growth_delta, margin_delta):
                 }
             )
         click.echo(pd.DataFrame(rows).to_string(index=False, float_format=lambda x: f"{x:,.2f}"))
-    except ValueError as e:
+    except (ValueError, TimeoutError, OSError) as e:
         click.echo(str(e), err=True)
         ctx.exit(1)
 
@@ -268,7 +301,7 @@ def _build_assumptions(
     if exit_multiple is not None:
         a.exit_ev_ebitda_multiple = exit_multiple
     if years is not None:
-        a.projection_years = years
+        a.projection_years = validate_projection_years(years)
     return a
 
 

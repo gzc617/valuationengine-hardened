@@ -61,10 +61,10 @@ def _mock_ticker_factory(info=None, financials=None, cashflow=None, balance_shee
     return mock
 
 
-@patch("valuationengine.data.fetcher.yf.Ticker")
-def test_fetch_company_happy_path(mock_ticker_cls):
+@patch("valuationengine.data.fetcher._load_yfinance")
+def test_fetch_company_happy_path(mock_load):
     """Happy path: fetch_company returns a fully populated Company."""
-    mock_ticker_cls.return_value = _mock_ticker_factory()
+    mock_load.return_value.Ticker.return_value = _mock_ticker_factory()
     c = fetch_company("TEST")
     assert c.ticker == "TEST"
     assert c.name == "Mock Corp"
@@ -73,21 +73,21 @@ def test_fetch_company_happy_path(mock_ticker_cls):
     assert c.beta == pytest.approx(1.1)
 
 
-@patch("valuationengine.data.fetcher.yf.Ticker")
-def test_fetch_company_missing_info_raises(mock_ticker_cls):
+@patch("valuationengine.data.fetcher._load_yfinance")
+def test_fetch_company_missing_info_raises(mock_load):
     """Empty or missing ticker info raises ValueError."""
     mock = MagicMock()
     mock.info = {}
     mock.financials = pd.DataFrame()
     mock.cashflow = pd.DataFrame()
     mock.balance_sheet = pd.DataFrame()
-    mock_ticker_cls.return_value = mock
+    mock_load.return_value.Ticker.return_value = mock
     with pytest.raises(ValueError):
         fetch_company("BAD")
 
 
-@patch("valuationengine.data.fetcher.yf.Ticker")
-def test_fetch_company_defaults_beta_to_one(mock_ticker_cls):
+@patch("valuationengine.data.fetcher._load_yfinance")
+def test_fetch_company_defaults_beta_to_one(mock_load):
     """When beta is None, fetcher defaults to 1.0."""
     info = {
         "longName": "X",
@@ -96,13 +96,13 @@ def test_fetch_company_defaults_beta_to_one(mock_ticker_cls):
         "marketCap": 50e6,
         "beta": None,
     }
-    mock_ticker_cls.return_value = _mock_ticker_factory(info=info)
+    mock_load.return_value.Ticker.return_value = _mock_ticker_factory(info=info)
     c = fetch_company("X")
     assert c.beta == pytest.approx(1.0)
 
 
-@patch("valuationengine.data.fetcher.yf.Ticker")
-def test_fetch_company_shares_fallback(mock_ticker_cls):
+@patch("valuationengine.data.fetcher._load_yfinance")
+def test_fetch_company_shares_fallback(mock_load):
     """When sharesOutstanding is None, fetcher falls back to market_cap / current_price."""
     info = {
         "longName": "X",
@@ -111,6 +111,6 @@ def test_fetch_company_shares_fallback(mock_ticker_cls):
         "marketCap": 100e6,
         "beta": 1.0,
     }
-    mock_ticker_cls.return_value = _mock_ticker_factory(info=info)
+    mock_load.return_value.Ticker.return_value = _mock_ticker_factory(info=info)
     c = fetch_company("X")
     assert c.shares_outstanding == pytest.approx(100e6 / 50.0)

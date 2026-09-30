@@ -4,14 +4,18 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
-_PARENT = _ROOT.parent
-for _path in (_PARENT, _ROOT):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import pytest
 
 from valuationengine.core.models import Assumptions, Company
+
+
+@pytest.fixture(autouse=True)
+def _live_fetch_unless_test_opts_into_safe_mode(monkeypatch):
+    """Keep the suite on the live (mocked) fetch path unless a test sets SAFE_MODE."""
+    monkeypatch.delenv("SAFE_MODE", raising=False)
 
 
 @pytest.fixture

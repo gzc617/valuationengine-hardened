@@ -6,8 +6,8 @@ from copy import deepcopy
 
 from scipy.optimize import brentq
 
-from core import dcf
-from core.models import Assumptions, Company, assumption_field_names
+from valuationengine.core import dcf
+from valuationengine.core.models import Assumptions, Company, assumption_field_names
 
 
 def solve(
