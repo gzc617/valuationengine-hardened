@@ -21,6 +21,7 @@ def run(
         company: Company to value.
         scenarios: Mapping of scenario name to Assumptions.
         valuation_fn: Valuation runner; defaults to dcf.run.
+        Statement-model assumptions stay on the statement DCF.
 
     Returns:
         Dict mapping scenario name to the valuation result object.

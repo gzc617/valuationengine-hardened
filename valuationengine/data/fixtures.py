@@ -2,7 +2,8 @@
 
 These figures are synthetic. They are not quotes, filings, or a cache of
 market data. The same ticker always produces the same company, with no
-clock, disk, or network access.
+clock, disk, or network access. Statement-model balances below are part of
+that synthetic profile so the opt-in DCF can run offline.
 """
 
 from __future__ import annotations
@@ -85,8 +86,17 @@ def fixture_company(ticker: str, history_years: int = 5) -> Company:
     ebitda = [operating + da for operating, da in zip(ebit, depreciation)]
     capex = [value * 0.04 for value in revenue]
     change_in_nwc = [value * 0.01 for value in revenue]
+    net_ppe = [revenue[0] * 0.40]
+    for index in range(1, len(revenue)):
+        net_ppe.append(net_ppe[-1] + capex[index] - depreciation[index])
+    receivables = [value * 0.12 for value in revenue]
+    inventory = [value * 0.08 for value in revenue]
+    other_operating_current_assets = [value * 0.02 for value in revenue]
+    payables = [value * 0.07 for value in revenue]
+    other_operating_current_liabilities = [value * 0.03 for value in revenue]
     shares = float(spec["shares"])
     price = float(spec["price"])
+    fiscal_year_ends = [f"Y{index}" for index in range(history_years)]
 
     return Company(
         ticker=ticker,
@@ -104,6 +114,18 @@ def fixture_company(ticker: str, history_years: int = 5) -> Company:
         current_price=price,
         market_cap=shares * price,
         beta=float(spec["beta"]),
+        fiscal_year_ends=fiscal_year_ends,
+        net_ppe=net_ppe,
+        receivables=receivables,
+        inventory=inventory,
+        other_operating_current_assets=other_operating_current_assets,
+        payables=payables,
+        other_operating_current_liabilities=other_operating_current_liabilities,
+        preferred_equity=20.0,
+        noncontrolling_interest=10.0,
+        other_adjustments=-5.0,
+        diluted_shares=shares * 1.05,
+        missing_fields=(),
     )
 
 

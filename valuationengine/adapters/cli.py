@@ -11,11 +11,12 @@ import click
 import pandas as pd
 
 from valuationengine.core import dcf as dcf_module
+from valuationengine.core.dcf import FCF_MARGIN_SENSITIVITY_LABEL
 from valuationengine.core import lbo as lbo_module
 from valuationengine.core import reverse as reverse_module
 from valuationengine.core import scenario as scenario_module
 from valuationengine.core import sensitivity as sensitivity_module
-from valuationengine.core.models import Assumptions
+from valuationengine.core.models import SOURCE_EXPLICIT, SOURCE_GENERIC_FALLBACK, SOURCE_REPORTED, Assumptions
 from valuationengine.data.fetcher import fetch_company
 from valuationengine.safe_mode import install_network_guard, safe_mode_enabled
 from valuationengine.validation import (
@@ -23,6 +24,7 @@ from valuationengine.validation import (
     validate_hold_years,
     validate_projection_years,
     validate_sensitivity_steps,
+    validate_dcf_model,
 )
 
 
@@ -46,7 +48,28 @@ def _load_company(ticker: str):
 def _history_source(ticker: str) -> str:
     if safe_mode_enabled():
         return "deterministic fixture history (SAFE_MODE=1)"
-    return f"{ticker}'s own 5yr history"
+    return f"{ticker}'s reported fiscal history"
+
+
+def _source_label(assumptions: Assumptions, name: str) -> str:
+    return assumptions.driver_sources.get(name, "explicit")
+
+
+def _base_case_line(assumptions: Assumptions, ticker: str, model: str) -> str:
+    growth_source = _source_label(assumptions, "revenue_growth")
+    margin_source = _source_label(assumptions, "operating_margin")
+    if model == "statement":
+        return (
+            f"Statement case: {assumptions.revenue_growth * 100:.1f}% growth ({growth_source}), "
+            f"{assumptions.operating_margin * 100:.1f}% EBIT margin ({margin_source}). "
+            f"Normalized and reported inputs are labeled separately from generic fallbacks. "
+            f"History: {_history_source(ticker)}. Book debt is a WACC proxy."
+        )
+    return (
+        f"Calibrated base case: {assumptions.revenue_growth * 100:.1f}% growth ({growth_source}), "
+        f"{assumptions.operating_margin * 100:.1f}% margin ({margin_source}) from {_history_source(ticker)} "
+        f"unless overridden by flags"
+    )
 
 
 @cli.command()
@@ -59,6 +82,20 @@ def _history_source(ticker: str) -> str:
 @click.option("--use-exit-multiple", is_flag=True, help="Use exit EV/EBITDA multiple for terminal value.")
 @click.option("--exit-multiple", type=float, default=None, help="Terminal exit EV/EBITDA multiple.")
 @click.option("--years", type=int, default=None, help="Projection years.")
+@click.option(
+    "--model",
+    type=click.Choice(["intensity", "statement"]),
+    default="intensity",
+    show_default=True,
+    help="intensity keeps the default DCF. statement opts into the school statement DCF.",
+)
+@click.option(
+    "--wacc",
+    "wacc_override",
+    type=float,
+    default=None,
+    help="Optional WACC override. Requires --model statement.",
+)
 @click.pass_context
 def dcf(
     ctx,
@@ -71,6 +108,8 @@ def dcf(
     use_exit_multiple,
     exit_multiple,
     years,
+    model,
+    wacc_override,
 ):
     """Run a DCF on TICKER."""
     try:
@@ -88,13 +127,11 @@ def dcf(
             use_exit_multiple=use_exit_multiple,
             exit_multiple=exit_multiple,
             years=years,
+            model=model,
+            wacc_override=wacc_override,
         )
         result = dcf_module.run(company, assumptions)
-        click.echo(
-            f"Calibrated base case: {assumptions.revenue_growth*100:.1f}% growth, "
-            f"{assumptions.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
-            f"unless overridden by flags)"
-        )
+        click.echo(_base_case_line(assumptions, ticker, model))
         click.echo(result.summary())
         click.echo("")
         click.echo("Projection:")
@@ -119,6 +156,10 @@ def lbo(ctx, ticker, entry_multiple, exit_multiple, debt_pct, interest_rate, hol
         ticker = company.ticker
         a = Assumptions.calibrated_for(company)
         a.tax_rate = company.effective_tax_rate
+        if "effective_tax_rate" in set(company.missing_fields):
+            a.driver_sources["tax_rate"] = SOURCE_GENERIC_FALLBACK
+        else:
+            a.driver_sources["tax_rate"] = SOURCE_REPORTED
         if entry_multiple is not None:
             a.entry_ev_ebitda_multiple = entry_multiple
         if exit_multiple is not None:
@@ -130,11 +171,7 @@ def lbo(ctx, ticker, entry_multiple, exit_multiple, debt_pct, interest_rate, hol
         if hold is not None:
             a.hold_period_years = validate_hold_years(hold)
         result = lbo_module.run(company, a)
-        click.echo(
-            f"Calibrated base case: {a.revenue_growth*100:.1f}% growth, "
-            f"{a.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
-            f"unless overridden by flags)"
-        )
+        click.echo(_base_case_line(a, ticker, "intensity"))
         click.echo(result.summary())
         click.echo("")
         click.echo("Debt schedule:")
@@ -148,22 +185,24 @@ def lbo(ctx, ticker, entry_multiple, exit_multiple, debt_pct, interest_rate, hol
 @click.argument("ticker")
 @click.option("--field", default="revenue_growth", type=click.Choice(["revenue_growth", "operating_margin", "terminal_growth"]), help="Assumption field to solve for.")
 @click.option("--target", default="market_cap", type=click.Choice(["market_cap", "current_price"]))
+@click.option(
+    "--model",
+    type=click.Choice(["intensity", "statement"]),
+    default="intensity",
+    show_default=True,
+    help="intensity keeps the default DCF. statement opts into the school statement DCF.",
+)
 @click.pass_context
-def reverse(ctx, ticker, field, target):
+def reverse(ctx, ticker, field, target, model):
     """Run a reverse DCF on TICKER: back-solve market-implied assumptions."""
     try:
         company = _load_company(ticker)
         ticker = company.ticker
-        assumptions = Assumptions.calibrated_for(company)
-        assumptions.tax_rate = company.effective_tax_rate
+        assumptions = _build_assumptions(company, model=model)
         result = reverse_module.solve(
             company, assumptions, field=field, target=target
         )
-        click.echo(
-            f"Calibrated base case: {assumptions.revenue_growth*100:.1f}% growth, "
-            f"{assumptions.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
-            f"unless overridden by flags)"
-        )
+        click.echo(_base_case_line(assumptions, ticker, model))
         click.echo(f"\nReverse DCF for {ticker}")
         click.echo(f"Solving for: {result['field']}")
         click.echo(f"Target ({result['target']}): {result['target_value']:,.2f}")
@@ -185,6 +224,13 @@ def reverse(ctx, ticker, field, target):
 @click.option("--y-max", type=float, required=True)
 @click.option("--y-steps", type=int, default=5)
 @click.option("--output", default="value_per_share", type=click.Choice(["value_per_share", "upside", "enterprise_value", "equity_value"]))
+@click.option(
+    "--model",
+    type=click.Choice(["intensity", "statement"]),
+    default="intensity",
+    show_default=True,
+    help="intensity keeps the default DCF. statement opts into the school statement DCF.",
+)
 @click.pass_context
 def sensitivity(
     ctx,
@@ -198,6 +244,7 @@ def sensitivity(
     y_max,
     y_steps,
     output,
+    model,
 ):
     """Run a 2D sensitivity table on TICKER."""
     import numpy as np
@@ -205,10 +252,14 @@ def sensitivity(
     try:
         x_steps = validate_sensitivity_steps(x_steps, axis="X steps")
         y_steps = validate_sensitivity_steps(y_steps, axis="Y steps")
+        model = validate_dcf_model(model)
+        if model != "statement" and {"wacc_override", "fcf_margin_override"} & {x_field, y_field}:
+            raise ValueError(
+                "WACC and FCF-margin surfaces apply to the statement model. Pass --model statement."
+            )
         company = _load_company(ticker)
         ticker = company.ticker
-        assumptions = Assumptions.calibrated_for(company)
-        assumptions.tax_rate = company.effective_tax_rate
+        assumptions = _build_assumptions(company, model=model)
         x_values = list(np.linspace(x_min, x_max, x_steps))
         y_values = list(np.linspace(y_min, y_max, y_steps))
         table = sensitivity_module.run(
@@ -220,11 +271,9 @@ def sensitivity(
             y_values,
             output=output,
         )
-        click.echo(
-            f"Calibrated base case: {assumptions.revenue_growth*100:.1f}% growth, "
-            f"{assumptions.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
-            f"unless overridden by flags)"
-        )
+        click.echo(_base_case_line(assumptions, ticker, model))
+        if "fcf_margin_override" in {x_field, y_field}:
+            click.echo(FCF_MARGIN_SENSITIVITY_LABEL)
         click.echo(f"\nSensitivity table for {ticker} ({output})")
         click.echo(f"Rows: {y_field}, Columns: {x_field}\n")
         click.echo(table.to_string(float_format=lambda x: f"{x:,.2f}"))
@@ -237,25 +286,27 @@ def sensitivity(
 @click.argument("ticker")
 @click.option("--growth-delta", type=float, default=0.03)
 @click.option("--margin-delta", type=float, default=0.03)
+@click.option(
+    "--model",
+    type=click.Choice(["intensity", "statement"]),
+    default="intensity",
+    show_default=True,
+    help="intensity keeps the default DCF. statement opts into the school statement DCF.",
+)
 @click.pass_context
-def scenario(ctx, ticker, growth_delta, margin_delta):
+def scenario(ctx, ticker, growth_delta, margin_delta, model):
     """Run bull / base / bear scenario analysis on TICKER."""
     try:
         company = _load_company(ticker)
         ticker = company.ticker
-        assumptions = Assumptions.calibrated_for(company)
-        assumptions.tax_rate = company.effective_tax_rate
+        assumptions = _build_assumptions(company, model=model)
         scenarios = scenario_module.build_bull_base_bear(
             assumptions,
             growth_delta=growth_delta,
             margin_delta=margin_delta,
         )
         results = scenario_module.run(company, scenarios)
-        click.echo(
-            f"Calibrated base case: {assumptions.revenue_growth*100:.1f}% growth, "
-            f"{assumptions.operating_margin*100:.1f}% margin (from {_history_source(ticker)} "
-            f"unless overridden by flags)"
-        )
+        click.echo(_base_case_line(assumptions, ticker, model))
         click.echo(f"\nScenario analysis for {ticker}\n")
         rows = []
         for name, r in results.items():
@@ -283,13 +334,26 @@ def _build_assumptions(
     use_exit_multiple=False,
     exit_multiple=None,
     years=None,
+    model="intensity",
+    wacc_override=None,
 ) -> Assumptions:
-    a = Assumptions.calibrated_for(company)
+    model = validate_dcf_model(model)
+    if model == "statement":
+        a = Assumptions.normalized_for(company)
+    else:
+        a = Assumptions.calibrated_for(company)
+    a.valuation_model = model
     a.tax_rate = company.effective_tax_rate
+    if "effective_tax_rate" in set(company.missing_fields):
+        a.driver_sources["tax_rate"] = SOURCE_GENERIC_FALLBACK
+    else:
+        a.driver_sources["tax_rate"] = SOURCE_REPORTED
     if growth is not None:
         a.revenue_growth = growth
+        a.driver_sources["revenue_growth"] = SOURCE_EXPLICIT
     if margin is not None:
         a.operating_margin = margin
+        a.driver_sources["operating_margin"] = SOURCE_EXPLICIT
     if wacc_rf is not None:
         a.risk_free_rate = wacc_rf
     if wacc_erp is not None:
@@ -302,6 +366,10 @@ def _build_assumptions(
         a.exit_ev_ebitda_multiple = exit_multiple
     if years is not None:
         a.projection_years = validate_projection_years(years)
+    if wacc_override is not None:
+        if model != "statement":
+            raise ValueError("WACC override applies to the statement model. Pass --model statement.")
+        a.wacc_override = wacc_override
     return a
 
 

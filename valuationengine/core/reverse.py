@@ -10,6 +10,30 @@ from valuationengine.core import dcf
 from valuationengine.core.models import Assumptions, Company, assumption_field_names
 
 
+_SOLVABLE_DCF_FIELDS = {
+    "revenue_growth",
+    "operating_margin",
+    "capex_pct_revenue",
+    "da_pct_revenue",
+    "nwc_pct_revenue",
+    "tax_rate",
+    "risk_free_rate",
+    "equity_risk_premium",
+    "cost_of_debt",
+    "target_debt_weight",
+    "terminal_growth",
+    "exit_ev_ebitda_multiple",
+    "wacc_override",
+    "da_pct_opening_ppe",
+    "receivables_pct_revenue",
+    "inventory_pct_revenue",
+    "other_operating_ca_pct_revenue",
+    "payables_pct_revenue",
+    "other_operating_cl_pct_revenue",
+    "fcf_margin_override",
+}
+
+
 def solve(
     company: Company,
     base_assumptions: Assumptions,
@@ -21,6 +45,9 @@ def solve(
     Solve for the assumption that makes DCF output match a market target.
 
     Finds x such that f(x) = 0 where f compares DCF output to market_cap or current_price.
+    Statement-model assumptions are valued with the statement DCF; the solver
+    itself does not change. An ``fcf_margin_override`` solve is the labeled
+    sensitivity shortcut, not a rebuilt statement.
 
     Args:
         company: Company to value.
@@ -34,6 +61,8 @@ def solve(
     """
     if field not in assumption_field_names():
         raise ValueError(f"Unknown Assumptions field '{field}'.")
+    if field not in _SOLVABLE_DCF_FIELDS:
+        raise ValueError(f"Assumptions field '{field}' is not a continuous numeric DCF input.")
     if target not in {"market_cap", "current_price"}:
         raise ValueError("target must be 'market_cap' or 'current_price'.")
 

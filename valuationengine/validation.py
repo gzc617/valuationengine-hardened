@@ -6,6 +6,7 @@ checked here so every caller uses the same rules.
 
 from __future__ import annotations
 
+import math
 import re
 
 MAX_TICKERS = 5
@@ -112,3 +113,33 @@ def validate_hold_years(years: int) -> int:
     if isinstance(years, bool) or not isinstance(years, int) or not MIN_HOLD_YEARS <= years <= MAX_HOLD_YEARS:
         raise ValueError(f"Hold years must be a whole number from {MIN_HOLD_YEARS} to {MAX_HOLD_YEARS}.")
     return years
+
+
+DCF_MODEL_INTENSITY = "intensity"
+DCF_MODEL_STATEMENT = "statement"
+DCF_MODELS = (DCF_MODEL_INTENSITY, DCF_MODEL_STATEMENT)
+
+
+def validate_dcf_model(model: str) -> str:
+    """Accept the default intensity model or the opt-in statement model."""
+    if model not in DCF_MODELS:
+        raise ValueError("DCF model must be 'intensity' or 'statement'.")
+    return model
+
+
+def validate_wacc_override(wacc: float) -> float:
+    """Bound an explicit WACC. The statement model is the caller that uses it."""
+    if isinstance(wacc, bool) or not isinstance(wacc, (int, float)) or not math.isfinite(wacc):
+        raise ValueError("WACC override must be a finite number.")
+    if not 0 < wacc < 1:
+        raise ValueError("WACC override must be greater than 0 and less than 1.")
+    return float(wacc)
+
+
+def validate_fcf_margin(margin: float) -> float:
+    """Bound the FCF-margin sensitivity shortcut."""
+    if isinstance(margin, bool) or not isinstance(margin, (int, float)) or not math.isfinite(margin):
+        raise ValueError("FCF margin must be a finite number.")
+    if not -1 <= margin <= 1:
+        raise ValueError("FCF margin must be between -1 and 1.")
+    return float(margin)

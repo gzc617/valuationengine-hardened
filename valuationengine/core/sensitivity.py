@@ -25,6 +25,11 @@ def run(
     Run a 2D sensitivity table over two Assumptions fields.
 
     Each cell runs valuation_fn(company, overridden_assumptions) and extracts `output`.
+    When the assumption is a statement-model case, cells use that DCF unchanged.
+    Sweeping ``fcf_margin_override`` is the labeled FCF-margin shortcut
+    (``dcf.FCF_MARGIN_SENSITIVITY_LABEL``), not a full statement rebuild.
+    Sweeping ``wacc_override`` against ``terminal_growth`` is the school WACC
+    versus terminal-growth surface.
 
     Args:
         company: Company to value.
